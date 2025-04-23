@@ -11,6 +11,7 @@ def process_listing(listing_to_process, page) ->  SearchGoogleMapsResponse:
     result: SearchGoogleMapsResponse = SearchGoogleMapsResponse()
     # Conjunto para almacenar nombres ya procesados y evitar duplicados
     processed_names = set()
+    lastname = None
     
     name_xpath = '//div[@class="TIHn2 "]//h1[@class="DUwDvf lfPIob"]'
     address_xpath = '//button[@data-item-id="address"]//div[contains(@class, "fontBodyMedium")]'
@@ -18,70 +19,115 @@ def process_listing(listing_to_process, page) ->  SearchGoogleMapsResponse:
     phone_xpath = '//button[contains(@data-item-id, "phone")]//div[contains(@class, "fontBodyMedium")]'
     schedule_xpath1 = '//div[contains(@aria-label, "Tuesday,")]'
     schedule_xpath2 = '//div[contains(@jsaction, "pane.openhours")]//span[contains(@aria-label, "Show open hours for the week")]'
+    
     for listing in listing_to_process:
-        listing.click()
-        page.wait_for_selector('//div[@class="TIHn2 "]//h1[@class="DUwDvf lfPIob"]', timeout=30000)
-        
-        name = extract_data(name_xpath, page)
-        
-        # Verificar si el nombre ya ha sido procesado
-        if name and name in processed_names:
-            print(f"Skipping duplicate restaurant: {name}")
-            continue
+        try:
+            # Hacemos clic en el listing
+            listing.click()
             
-        # Añadir el nombre al conjunto de nombres procesados
-        if name:
-            processed_names.add(name)
-        
-        address = extract_data(address_xpath, page)
-        
-        if page.locator(website_xpath).count() > 0:
-            website = page.locator(website_xpath).get_attribute("href")
-        else:
-            website = ""
-        
-        phone = extract_data(phone_xpath, page)
-        if page.locator(schedule_xpath2).count() > 0:
-            page.locator(schedule_xpath2).click()
-            page.wait_for_selector('//div[contains(@aria-label, "Tuesday,")]', timeout=10000)
-            schedule_text = page.locator(schedule_xpath1).get_attribute("aria-label")
-        elif page.locator(schedule_xpath1).count() > 0:
-            schedule_text = page.locator(schedule_xpath1).get_attribute("aria-label")
-        else:
+            # Esperamos a que aparezca el selector del nombre
+            page.wait_for_selector(name_xpath, timeout=30000)
+            
+            # Obtenemos el nombre
+            current_name = extract_data(name_xpath, page)
+            
+            # Si no hay nombre, continuamos con el siguiente
+            if not current_name:
+                print("No se pudo obtener el nombre, continuando...")
+                continue
+            
+            # Verificamos si el nombre es igual al último procesado
+            max_retries = 5
+            retries = 0
+            
+            # Esperamos hasta que el nombre cambie o se agoten los intentos
+            while current_name == lastname and retries < max_retries:
+                print(f"Esperando a que cambie el nombre. Intento {retries+1}/{max_retries}...")
+                time.sleep(8)  # Esperamos 10 segundos
+                current_name = extract_data(name_xpath, page)
+                retries += 1
+            
+            # Si después de los intentos sigue siendo el mismo, saltamos
+            if current_name == lastname:
+                print(f"El nombre no cambió después de {max_retries} intentos, saltando...")
+                continue
+            
+            # Verificamos si el nombre ya ha sido procesado
+            if current_name in processed_names:
+                print(f"Saltando restaurante duplicado: {current_name}")
+                continue
+                
+            # Actualizamos el último nombre procesado
+            lastname = current_name
+            
+            # Añadimos el nombre al conjunto de procesados
+            processed_names.add(current_name)
+            
+            # Ahora extraemos el resto de la información
+            address = extract_data(address_xpath, page)
+            
+            if page.locator(website_xpath).count() > 0:
+                website = page.locator(website_xpath).get_attribute("href")
+            else:
+                website = ""
+            
+            phone = extract_data(phone_xpath, page)
+            
+            # Obtenemos la información del horario
             schedule_text = ""
-        
-        # Limpiar el texto del horario
-        if schedule_text:
-            # Reemplazar los caracteres \u202f por espacio normal
-            schedule_text = schedule_text.replace('\u202f', ' ')
+            if page.locator(schedule_xpath2).count() > 0:
+                page.locator(schedule_xpath2).click()
+                try:
+                    page.wait_for_selector(schedule_xpath1, timeout=10000)
+                    schedule_text = page.locator(schedule_xpath1).get_attribute("aria-label")
+                except:
+                    print(f"No se pudo obtener el horario para {current_name}")
+            elif page.locator(schedule_xpath1).count() > 0:
+                schedule_text = page.locator(schedule_xpath1).get_attribute("aria-label")
             
-            # Eliminar "Hide open hours for the week" si está presente
-            if ". Hide open hours for the week" in schedule_text:
-                schedule_text = schedule_text.split(". Hide open hours for the week")[0]
+            # Limpiamos el texto del horario
+            if schedule_text:
+                # Reemplazar los caracteres \u202f por espacio normal
+                schedule_text = schedule_text.replace('\u202f', ' ')
+                
+                # Eliminar "Hide open hours for the week" si está presente
+                if ". Hide open hours for the week" in schedule_text:
+                    schedule_text = schedule_text.split(". Hide open hours for the week")[0]
+                
+                # Eliminar cualquier otro texto innecesario después del último día
+                days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+                last_day_index = -1
+                
+                for day in days:
+                    if day in schedule_text:
+                        last_day_index = max(last_day_index, schedule_text.rfind(day))
+                
+                if last_day_index != -1:
+                    # Encuentra el final de la información del último día
+                    parts = schedule_text[last_day_index:].split(';')
+                    if parts:
+                        end_of_schedule = parts[0].split('.')
+                        if end_of_schedule:
+                            schedule_text = schedule_text[:last_day_index] + end_of_schedule[0]
+                            if ';' in schedule_text[:last_day_index]:
+                                schedule_text += '.'
             
-            # Eliminar cualquier otro texto innecesario después del último día
-            days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-            last_day_index = -1
+            # Agregamos el elemento a los resultados
+            result.items.append(SearchGoogleMapsResponseItem(
+                name=current_name, 
+                address=address, 
+                website=website, 
+                phone_number=phone, 
+                schedule=schedule_text
+            ))
             
-            for day in days:
-                if day in schedule_text:
-                    last_day_index = max(last_day_index, schedule_text.rfind(day))
+            print(f"Procesado correctamente: {current_name}")
             
-            if last_day_index != -1:
-                # Encuentra el final de la información del último día
-                parts = schedule_text[last_day_index:].split(';')
-                if parts:
-                    end_of_schedule = parts[0].split('.')
-                    if end_of_schedule:
-                        schedule_text = schedule_text[:last_day_index] + end_of_schedule[0]
-                        if ';' in schedule_text[:last_day_index]:
-                            schedule_text += '.'
-        
-        result.items.append(SearchGoogleMapsResponseItem(name=name, address=address, website=website, phone_number=phone, schedule=schedule_text))
-        print(result)
-        
+        except Exception as e:
+            print(f"Error al procesar listing: {str(e)}")
+            continue
+    
     return result
-        
 
 
 def main(usr_query: str) -> SearchGoogleMapsResponse:
