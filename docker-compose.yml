@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  maps-scraper:
+    build: .
+    container_name: maps-scraper
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - HEADLESS=true
+      - HOST=0.0.0.0
+      - PORT=8000
