@@ -1,3 +1,4 @@
+import random
 import time
 from playwright.sync_api import sync_playwright
 from app.utils import extract_data
@@ -20,7 +21,6 @@ def process_listing(listing_to_process, page) ->  SearchGoogleMapsResponse:
     for listing in listing_to_process:
         listing.click()
         page.wait_for_selector('//div[@class="TIHn2 "]//h1[@class="DUwDvf lfPIob"]', timeout=30000)
-        page.wait_for_timeout(3000)
         
         name = extract_data(name_xpath, page)
         
@@ -85,9 +85,30 @@ def process_listing(listing_to_process, page) ->  SearchGoogleMapsResponse:
 
 
 def main(usr_query: str) -> SearchGoogleMapsResponse:
+    user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36"
     playwright = sync_playwright().start()
-    browser = playwright.chromium.launch(headless=True)
-    context = browser.new_context()
+    browser = playwright.chromium.launch(
+        headless=True,
+        args=[
+            '--disable-blink-features=AutomationControlled',
+            '--disable-dev-shm-usage',
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-gpu',
+            '--disable-web-security',
+            '--disable-features=IsolateOrigins,site-per-process'
+        ]
+    )
+    context = browser.new_context(
+        user_agent=user_agent,
+        viewport={"width": 1920, "height": 1080},
+        geolocation={"latitude": 19.4326, "longitude": -99.1332},  # Ciudad de México
+        locale="en-US",
+        timezone_id="America/Mexico_City",
+        record_video_dir="videos/",
+        record_video_size={"width": 1920, "height": 1080}
+    )
+    
     page = context.new_page()
 
     page.goto("https://www.google.com/maps?gl=MX&hl=en", wait_until="load")
@@ -96,18 +117,19 @@ def main(usr_query: str) -> SearchGoogleMapsResponse:
     print(f"Searching for {usr_query}")
     input_box = page.locator('//input[@name="q"]')
     input_box.fill(usr_query)
+    page.wait_for_timeout(random.randint(500, 1000))  # Simular pausa humana
     input_box.press("Enter")
 
     xpath_search_result_element = '//div[@role="feed"]'
     page.wait_for_selector(xpath_search_result_element)
     results_container = page.query_selector(xpath_search_result_element)
-    results_container.scroll_into_view_if_needed()
+    page.wait_for_timeout(3000)  # Dar tiempo para que carguen resultados iniciales
 
     keep_scrolling = True
     while keep_scrolling:
         print("Scrolling...")
         results_container.press("Space")
-        time.sleep(1)
+        time.sleep(2.5)
     
         if results_container.query_selector('//span[text()="You\'ve reached the end of the list."]'):
             print("Reached the end of the list")
@@ -121,6 +143,7 @@ def main(usr_query: str) -> SearchGoogleMapsResponse:
             places_string = process_listing(listening_to_process, page)
         
     context.close()
+    page.close()
     browser.close()
     playwright.stop()
     
